@@ -388,16 +388,39 @@ class SketcherTools:
     def _draw_rectangle(self, x1: float, y1: float, x2: float, y2: float) -> str:
         self._ensure_sketch_open()
         factory = self._active_factory
+        part = self.conn.get_active_part()
+        constraints = self._active_sketch.Constraints
 
         # Create 4 lines forming a closed rectangle
-        self._sketch_geometry.append(factory.CreateLine(x1, y1, x2, y1))  # bottom
-        self._sketch_geometry.append(factory.CreateLine(x2, y1, x2, y2))  # right
-        self._sketch_geometry.append(factory.CreateLine(x2, y2, x1, y2))  # top
-        self._sketch_geometry.append(factory.CreateLine(x1, y2, x1, y1))  # left
+        l1 = factory.CreateLine(x1, y1, x2, y1)  # bottom
+        l2 = factory.CreateLine(x2, y1, x2, y2)  # right
+        l3 = factory.CreateLine(x2, y2, x1, y2)  # top
+        l4 = factory.CreateLine(x1, y2, x1, y1)  # left
+
+        self._sketch_geometry.extend([l1, l2, l3, l4])
+
+        # Helper to add coincidence
+        def add_coincidence(elem1, elem2):
+            ref1 = part.CreateReferenceFromObject(elem1)
+            ref2 = part.CreateReferenceFromObject(elem2)
+            cst = constraints.AddBiEltCst(2, ref1, ref2) # 2 = catCstTypeOn
+            cst.Mode = 1 # catCstModeDriving
+
+        # Connect the lines at corners
+        add_coincidence(l1.EndPoint, l2.StartPoint)
+        add_coincidence(l2.EndPoint, l3.StartPoint)
+        add_coincidence(l3.EndPoint, l4.StartPoint)
+        add_coincidence(l4.EndPoint, l1.StartPoint)
+        
+        # Add horizontal/vertical constraints
+        constraints.AddMonoEltCst(8, part.CreateReferenceFromObject(l1)) # 8 = catCstTypeHorizontality
+        constraints.AddMonoEltCst(9, part.CreateReferenceFromObject(l2)) # 9 = catCstTypeVerticality
+        constraints.AddMonoEltCst(8, part.CreateReferenceFromObject(l3))
+        constraints.AddMonoEltCst(9, part.CreateReferenceFromObject(l4))
 
         return (
             f"Rectangle created from ({x1}, {y1}) to ({x2}, {y2}) mm "
-            f"[{abs(x2-x1):.1f} x {abs(y2-y1):.1f} mm]"
+            f"[{abs(x2-x1):.1f} x {abs(y2-y1):.1f} mm] with constraints"
         )
 
     def _draw_centered_rectangle(

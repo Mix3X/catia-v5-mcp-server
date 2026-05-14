@@ -159,20 +159,57 @@ class DocumentTools:
         self.conn.ensure_connected()
         docs = self.conn.documents
         doc = docs.Add("Part")
+        rename_error: str | None = None
         if name:
-            doc.Part.Name = name
-        part_name = doc.Part.Name
+            # doc.Part.Name is read-only in CATIA V5 COM; visible name is PartNumber on
+            # the Part document's Product representation. Fall through silently so the
+            # successfully-created part is not orphaned by a rename failure.
+            try:
+                doc.Product.PartNumber = name
+            except Exception as e1:
+                try:
+                    doc.Part.UpdateObject(doc.Part)
+                    doc.Part.Name = name
+                except Exception as e2:
+                    rename_error = f"{e1!s} / {e2!s}"
+        try:
+            part_name = doc.Product.PartNumber
+        except Exception:
+            try:
+                part_name = doc.Part.Name
+            except Exception:
+                part_name = "<unknown>"
         self.conn.refresh_display()
+        if rename_error:
+            return (
+                f"Created new Part document: '{part_name}' "
+                f"(requested name '{name}' could not be applied: {rename_error})"
+            )
         return f"Created new Part document: '{part_name}'"
 
     def _new_product(self, name: str | None = None) -> str:
         self.conn.ensure_connected()
         docs = self.conn.documents
         doc = docs.Add("Product")
+        rename_error: str | None = None
         if name:
-            doc.Product.Name = name
-        product_name = doc.Product.Name
+            try:
+                doc.Product.PartNumber = name
+            except Exception as e1:
+                try:
+                    doc.Product.Name = name
+                except Exception as e2:
+                    rename_error = f"{e1!s} / {e2!s}"
+        try:
+            product_name = doc.Product.PartNumber
+        except Exception:
+            product_name = doc.Product.Name
         self.conn.refresh_display()
+        if rename_error:
+            return (
+                f"Created new Product (assembly) document: '{product_name}' "
+                f"(requested name '{name}' could not be applied: {rename_error})"
+            )
         return f"Created new Product (assembly) document: '{product_name}'"
 
     def _open_document(self, file_path: str) -> str:

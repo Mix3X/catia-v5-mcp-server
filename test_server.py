@@ -32,6 +32,8 @@ def test_tool_definitions():
     from catia_mcp.tools.assembly import AssemblyTools
     from catia_mcp.tools.measurement import MeasurementTools
     from catia_mcp.tools.export import ExportTools
+    from catia_mcp.tools.knowledge import KnowledgeTools
+    from catia_mcp.tools.reference import ReferenceTools
 
     conn = CATIAConnection()
     modules = {
@@ -41,6 +43,8 @@ def test_tool_definitions():
         "Assembly": AssemblyTools(conn),
         "Measurement": MeasurementTools(conn),
         "Export": ExportTools(conn),
+        "Knowledge": KnowledgeTools(conn),
+        "Reference": ReferenceTools(conn),
     }
 
     total_tools = 0
