@@ -6,6 +6,8 @@ The first open-source MCP server for CATIA V5. Drive CATIA V5 CAD modeling from 
 
 ## What it does
 
+> **Fork notice:** this branch is maintained at `Mix3X/catia-v5-mcp-server` and includes bug fixes for sketch constraints and document creation. See [Changelog](#changelog).
+
 This MCP server exposes **50+ tools** that let Claude:
 
 - **Create and manage documents** — new Part, Product (assembly), open, save, close
@@ -26,7 +28,7 @@ This MCP server exposes **50+ tools** that let Claude:
 ## Quick Install (Recommended)
 
 ```bash
-git clone https://github.com/daiemon12/catia-v5-mcp-server.git
+git clone https://github.com/Mix3X/catia-v5-mcp-server.git
 cd catia-v5-mcp-server
 bash setup.sh
 ```
@@ -38,7 +40,7 @@ The script handles everything: dependencies, Claude Desktop config, and verifica
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/daiemon12/catia-v5-mcp-server.git
+git clone https://github.com/Mix3X/catia-v5-mcp-server.git
 cd catia-v5-mcp-server
 ```
 
@@ -176,10 +178,11 @@ CATIA V5 Application
 | `catia_list_documents` | List all open documents |
 | `catia_get_active_document_info` | Get detailed info about active document |
 
-### Sketcher Tools (11)
+### Sketcher Tools (12)
 | Tool | Description |
 |------|-------------|
 | `catia_create_sketch` | Create sketch on XY/YZ/ZX plane |
+| `catia_create_sketch_on_plane` | Create sketch on a named reference plane (e.g. offset plane) |
 | `catia_close_sketch` | Close sketch, return to Part Design |
 | `catia_sketch_line` | Draw a line |
 | `catia_sketch_rectangle` | Draw a rectangle (2 corners) |
@@ -270,6 +273,24 @@ This project is open-source. Contributions welcome:
 - **pycatia backend** as alternative to raw win32com
 - **Tests** with COM mocking
 - **3DEXPERIENCE** CATIA support
+
+## Changelog
+
+### Fork (`Mix3X/catia-v5-mcp-server`)
+
+Improvements over upstream `daiemon12/catia-v5-mcp-server`:
+
+**Sketcher**
+- Fixed `catia_sketch_constraint`: corrected `CatConstraintType` enum codes — all dimensional and geometric constraints (`distance`, `radius`, `angle`, `coincidence`, `perpendicular`, `parallel`, `fix`, ...) now succeed. Previous codes (`distance=0` etc.) mapped to `catCstTypeReference`, causing `AddBiEltCst failed` / `AddMonoEltCst failed` COM exceptions on every call.
+- Added typed geometry cache: `factory.Create*` objects (Line2D, Circle2D, ...) are stored on creation so their `Reference` is reusable for constraint binding. Fixes constraint reference resolution which previously broke on `sketch.GeometricElements.Item(i)` wrappers.
+- Added `make_ref()` helper with `CreateReferenceFromObject` → document `Selection` fallback for edge cases.
+- New tool `catia_create_sketch_on_plane`: create a sketch on a named reference plane (e.g. an offset plane produced by `catia_create_plane_offset`), in addition to the canonical XY/YZ/ZX planes.
+
+**Document creation**
+- Fixed `catia_new_part` / `catia_new_product` duplicate-document bug: previously the name assignment used `doc.Part.Name` which is read-only in CATIA V5 COM, raising an exception *after* the part was already created — leaving an orphan document. Now uses `doc.Product.PartNumber` with proper exception handling.
+
+**Verified workflow**
+- Fully parametric cube with user parameters `longueur` / `largeur` / `hauteur` bound to sketch length constraints and pad height via Knowledge formulas (see Usage Examples).
 
 ## License
 
