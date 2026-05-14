@@ -27,6 +27,10 @@ class SketcherTools:
         self.conn = connection
         self._active_sketch: Any | None = None
         self._active_factory: Any | None = None
+        # Cache of typed 2D geometry objects returned by factory.Create*.
+        # Needed because Sketch.GeometricElements.Item(i) returns a generic
+        # GeometricElement wrapper whose Reference is rejected by AddBiEltCst.
+        self._sketch_geometry: list[Any] = []
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         return [
@@ -47,6 +51,29 @@ class SketcherTools:
                             "default": "xy",
                         },
                     },
+                },
+            },
+            {
+                "name": "catia_create_sketch_on_plane",
+                "description": (
+                    "Create a new 2D sketch on a named reference plane (e.g. an offset "
+                    "plane created with catia_create_plane_offset). For canonical planes "
+                    "use catia_create_sketch with 'xy'/'yz'/'zx' instead. The sketch is "
+                    "opened for editing; close it with catia_close_sketch before applying "
+                    "3D features."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "plane_name": {
+                            "type": "string",
+                            "description": (
+                                "Name of an existing reference plane (e.g. 'Plane.1' or a "
+                                "custom name)."
+                            ),
+                        },
+                    },
+                    "required": ["plane_name"],
                 },
             },
             {
@@ -232,6 +259,8 @@ class SketcherTools:
         match tool_name:
             case "catia_create_sketch":
                 return self._create_sketch(arguments.get("plane", "xy"))
+            case "catia_create_sketch_on_plane":
+                return self._create_sketch_on_named_plane(arguments["plane_name"])
             case "catia_close_sketch":
                 return self._close_sketch()
             case "catia_sketch_line":
@@ -300,9 +329,43 @@ class SketcherTools:
         # Open the sketch for editing
         self._active_sketch = sketch
         self._active_factory = sketch.OpenEdition()
+        self._sketch_geometry = []
 
         plane_names = {"xy": "XY (front)", "yz": "YZ (right)", "zx": "ZX (top)"}
         return f"Sketch created on {plane_names.get(plane_key, plane)} plane. Ready for geometry."
+
+    def _create_sketch_on_named_plane(self, plane_name: str) -> str:
+        self.conn.ensure_connected()
+        part = self.conn.get_active_part()
+        body = self.conn.get_active_part_body()
+
+        # Search hybrid bodies for the named plane
+        plane_shape = None
+        hbs = part.HybridBodies
+        for i in range(1, hbs.Count + 1):
+            hb = hbs.Item(i)
+            shapes = hb.HybridShapes
+            for j in range(1, shapes.Count + 1):
+                s = shapes.Item(j)
+                if s.Name == plane_name:
+                    plane_shape = s
+                    break
+            if plane_shape is not None:
+                break
+
+        if plane_shape is None:
+            raise RuntimeError(
+                f"Plane '{plane_name}' not found in any geometrical set. "
+                "Create it with catia_create_plane_offset first."
+            )
+
+        ref = part.CreateReferenceFromObject(plane_shape)
+        sketch = body.Sketches.Add(ref)
+
+        self._active_sketch = sketch
+        self._active_factory = sketch.OpenEdition()
+        self._sketch_geometry = []
+        return f"Sketch created on plane '{plane_name}'. Ready for geometry."
 
     def _close_sketch(self) -> str:
         self._ensure_sketch_open()
@@ -311,6 +374,7 @@ class SketcherTools:
         self.conn.get_active_part().UpdateObject(sketch)
         self._active_sketch = None
         self._active_factory = None
+        self._sketch_geometry = []
         self.conn.refresh_display()
         return "Sketch closed. You can now apply Part Design features (pad, pocket, etc.)."
 
@@ -318,6 +382,7 @@ class SketcherTools:
         self._ensure_sketch_open()
         factory = self._active_factory
         line = factory.CreateLine(x1, y1, x2, y2)
+        self._sketch_geometry.append(line)
         return f"Line created from ({x1}, {y1}) to ({x2}, {y2}) mm"
 
     def _draw_rectangle(self, x1: float, y1: float, x2: float, y2: float) -> str:
@@ -325,10 +390,10 @@ class SketcherTools:
         factory = self._active_factory
 
         # Create 4 lines forming a closed rectangle
-        factory.CreateLine(x1, y1, x2, y1)  # bottom
-        factory.CreateLine(x2, y1, x2, y2)  # right
-        factory.CreateLine(x2, y2, x1, y2)  # top
-        factory.CreateLine(x1, y2, x1, y1)  # left
+        self._sketch_geometry.append(factory.CreateLine(x1, y1, x2, y1))  # bottom
+        self._sketch_geometry.append(factory.CreateLine(x2, y1, x2, y2))  # right
+        self._sketch_geometry.append(factory.CreateLine(x2, y2, x1, y2))  # top
+        self._sketch_geometry.append(factory.CreateLine(x1, y2, x1, y1))  # left
 
         return (
             f"Rectangle created from ({x1}, {y1}) to ({x2}, {y2}) mm "
@@ -344,7 +409,8 @@ class SketcherTools:
     def _draw_circle(self, cx: float, cy: float, radius: float) -> str:
         self._ensure_sketch_open()
         factory = self._active_factory
-        factory.CreateClosedCircle(cx, cy, radius)
+        circle = factory.CreateClosedCircle(cx, cy, radius)
+        self._sketch_geometry.append(circle)
         return f"Circle created at ({cx}, {cy}) with radius {radius} mm"
 
     def _draw_arc(
@@ -357,7 +423,8 @@ class SketcherTools:
         # CATIA CreateArc expects angles in radians
         start_rad = math.radians(start_angle)
         end_rad = math.radians(end_angle)
-        factory.CreateArc(cx, cy, radius, start_rad, end_rad)
+        arc = factory.CreateArc(cx, cy, radius, start_rad, end_rad)
+        self._sketch_geometry.append(arc)
         return (
             f"Arc created at ({cx}, {cy}), radius={radius} mm, "
             f"from {start_angle}° to {end_angle}°"
@@ -373,13 +440,18 @@ class SketcherTools:
         spline_pts = []
         for pt in points:
             ctrl_pt = factory.CreatePoint(pt[0], pt[1])
+            self._sketch_geometry.append(ctrl_pt)
             spline_pts.append(ctrl_pt)
 
         spline = factory.CreateSpline(spline_pts)
+        self._sketch_geometry.append(spline)
 
         if closed and len(points) >= 3:
             # Close the spline by adding a line from last to first point
-            factory.CreateLine(points[-1][0], points[-1][1], points[0][0], points[0][1])
+            closing_line = factory.CreateLine(
+                points[-1][0], points[-1][1], points[0][0], points[0][1]
+            )
+            self._sketch_geometry.append(closing_line)
 
         pts_str = ", ".join(f"({p[0]}, {p[1]})" for p in points)
         return f"Spline created through {len(points)} points: {pts_str}" + (
@@ -389,7 +461,8 @@ class SketcherTools:
     def _draw_point(self, x: float, y: float) -> str:
         self._ensure_sketch_open()
         factory = self._active_factory
-        factory.CreatePoint(x, y)
+        point = factory.CreatePoint(x, y)
+        self._sketch_geometry.append(point)
         return f"Point created at ({x}, {y}) mm"
 
     def _add_constraint(self, args: dict[str, Any]) -> str:
@@ -402,6 +475,41 @@ class SketcherTools:
 
         constraints = sketch.Constraints
         geom = sketch.GeometricElements
+        part = self.conn.get_active_part()
+        selection = self.conn.hso
+
+        def make_ref(idx: int):
+            # Index 1 in GeometricElements is the AbsoluteAxis; user geometry starts at 2.
+            # The cache holds the typed 2D dispatch objects (Line2D, Circle2D, ...) that
+            # factory.Create* returned — those produce References that AddBiEltCst accepts.
+            cache_idx = idx - 2
+            elem = None
+            if 0 <= cache_idx < len(self._sketch_geometry):
+                elem = self._sketch_geometry[cache_idx]
+            if elem is None:
+                # Fallback for geometry created before the cache existed (e.g. reload mid-sketch).
+                elem = geom.Item(idx)
+
+            try:
+                ref = part.CreateReferenceFromObject(elem)
+                if ref is not None:
+                    return ref
+            except Exception:
+                pass
+            # Last-resort: route through the document Selection. Rarely needed once the
+            # cache is populated, but kept for robustness on edge cases.
+            selection.Clear()
+            try:
+                selection.Add(elem)
+                if selection.Count == 0:
+                    raise RuntimeError(
+                        f"Selection.Add returned empty for sketch element index {idx} "
+                        f"(name={getattr(elem, 'Name', '?')})."
+                    )
+                ref = selection.Item(1).Reference
+            finally:
+                selection.Clear()
+            return ref
 
         # Dimensional constraints (need a geometry reference + value)
         if constraint_type in ("distance", "radius", "angle"):
@@ -410,36 +518,36 @@ class SketcherTools:
             if idx1 is None:
                 raise ValueError(f"Constraint type '{constraint_type}' requires 'geometry_index_1'.")
 
-            ref1 = geom.Item(idx1)
+            ref1 = make_ref(idx1)
 
             if constraint_type == "distance" and idx2 is not None:
-                ref2 = geom.Item(idx2)
-                cst = constraints.AddBiEltCst(0, ref1, ref2)  # catCstTypeDistance = 0
+                ref2 = make_ref(idx2)
+                cst = constraints.AddBiEltCst(1, ref1, ref2)  # catCstTypeDistance
                 cst.Dimension.Value = value
             elif constraint_type == "distance":
-                cst = constraints.AddMonoEltCst(0, ref1)  # Length constraint
+                cst = constraints.AddMonoEltCst(5, ref1)  # catCstTypeLength
                 cst.Dimension.Value = value
             elif constraint_type == "radius":
-                cst = constraints.AddMonoEltCst(1, ref1)  # catCstTypeRadius = 1
+                cst = constraints.AddMonoEltCst(12, ref1)  # catCstTypeRadius
                 cst.Dimension.Value = value
             elif constraint_type == "angle":
                 if idx2 is None:
                     raise ValueError("Angle constraint requires 'geometry_index_2'.")
-                ref2 = geom.Item(idx2)
-                cst = constraints.AddBiEltCst(2, ref1, ref2)  # catCstTypeAngle = 2
+                ref2 = make_ref(idx2)
+                cst = constraints.AddBiEltCst(10, ref1, ref2)  # catCstTypeAngle
                 cst.Dimension.Value = value
 
             return f"{constraint_type.capitalize()} constraint added: {value} {'mm' if constraint_type != 'angle' else '°'}"
 
         # Geometric constraints (no value needed)
         cst_type_map = {
-            "coincidence": 3,   # catCstTypeOn
-            "tangent": 4,       # catCstTypeTangent
-            "perpendicular": 6, # catCstTypePerpendicular
-            "parallel": 7,      # catCstTypeParallel
+            "coincidence": 2,   # catCstTypeOn
+            "tangent": 4,       # catCstTypeTangency
+            "perpendicular": 7, # catCstTypePerpendicularity
+            "parallel": 6,      # catCstTypeParallelism
             "horizontal": 8,    # catCstTypeHorizontality
             "vertical": 9,      # catCstTypeVerticality
-            "fix": 10,          # catCstTypeFix
+            "fix": 18,          # catCstTypeFix
         }
 
         cst_code = cst_type_map.get(constraint_type)
@@ -449,15 +557,15 @@ class SketcherTools:
         if constraint_type in ("horizontal", "vertical", "fix"):
             if idx1 is None:
                 raise ValueError(f"Constraint '{constraint_type}' requires 'geometry_index_1'.")
-            ref1 = geom.Item(idx1)
+            ref1 = make_ref(idx1)
             constraints.AddMonoEltCst(cst_code, ref1)
         else:
             if idx1 is None or idx2 is None:
                 raise ValueError(
                     f"Constraint '{constraint_type}' requires both 'geometry_index_1' and 'geometry_index_2'."
                 )
-            ref1 = geom.Item(idx1)
-            ref2 = geom.Item(idx2)
+            ref1 = make_ref(idx1)
+            ref2 = make_ref(idx2)
             constraints.AddBiEltCst(cst_code, ref1, ref2)
 
         return f"{constraint_type.capitalize()} constraint added"
