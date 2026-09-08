@@ -77,6 +77,26 @@ class SketcherTools:
                 },
             },
             {
+                "name": "catia_edit_sketch",
+                "description": (
+                    "Open an EXISTING sketch by name for editing (activates it as the "
+                    "current sketch). Use to add constraints or geometry to a sketch that "
+                    "already exists in the part. The geometry cache is rebuilt from the "
+                    "sketch's existing elements so catia_sketch_constraint can reference "
+                    "them by index. Close with catia_close_sketch when done."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_name": {
+                            "type": "string",
+                            "description": "Name of the existing sketch (e.g. 'Sketch_Sep').",
+                        },
+                    },
+                    "required": ["sketch_name"],
+                },
+            },
+            {
                 "name": "catia_close_sketch",
                 "description": (
                     "Close the active sketch and return to Part Design. "
@@ -261,6 +281,8 @@ class SketcherTools:
                 return self._create_sketch(arguments.get("plane", "xy"))
             case "catia_create_sketch_on_plane":
                 return self._create_sketch_on_named_plane(arguments["plane_name"])
+            case "catia_edit_sketch":
+                return self._edit_sketch(arguments["sketch_name"])
             case "catia_close_sketch":
                 return self._close_sketch()
             case "catia_sketch_line":
@@ -366,6 +388,47 @@ class SketcherTools:
         self._active_factory = sketch.OpenEdition()
         self._sketch_geometry = []
         return f"Sketch created on plane '{plane_name}'. Ready for geometry."
+
+    def _edit_sketch(self, sketch_name: str) -> str:
+        self.conn.ensure_connected()
+        part = self.conn.get_active_part()
+
+        # Search every body for a sketch matching the given name.
+        sketch = None
+        bodies = part.Bodies
+        for i in range(1, bodies.Count + 1):
+            sketches = bodies.Item(i).Sketches
+            for j in range(1, sketches.Count + 1):
+                s = sketches.Item(j)
+                if s.Name == sketch_name:
+                    sketch = s
+                    break
+            if sketch is not None:
+                break
+
+        if sketch is None:
+            raise RuntimeError(
+                f"Sketch '{sketch_name}' not found in any body of the active part."
+            )
+
+        self._active_sketch = sketch
+        self._active_factory = sketch.OpenEdition()
+
+        # Rebuild the geometry cache from the sketch's existing elements.
+        # GeometricElements index 1 is the AbsoluteAxis; user geometry starts at 2.
+        # The cache holds user geometry only (cache[0] == GeometricElements.Item(2)),
+        # matching the `cache_idx = idx - 2` convention used by _add_constraint.
+        self._sketch_geometry = []
+        geom = sketch.GeometricElements
+        for i in range(2, geom.Count + 1):
+            self._sketch_geometry.append(geom.Item(i))
+
+        return (
+            f"Sketch '{sketch_name}' opened for editing "
+            f"({geom.Count} geometry elements). "
+            "Use catia_sketch_get_geometry to list them, then add constraints. "
+            "Close with catia_close_sketch."
+        )
 
     def _close_sketch(self) -> str:
         self._ensure_sketch_open()

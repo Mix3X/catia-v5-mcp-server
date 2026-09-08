@@ -583,18 +583,30 @@ class PartDesignTools:
         sf = part.ShapeFactory
 
         feature = self._get_last_shape(args.get("feature_name"))
-        d1_count = args["dir1_count"]
-        d1_spacing = args["dir1_spacing"]
-        d2_count = args.get("dir2_count", 1)
-        d2_spacing = args.get("dir2_spacing", 0)
+        d1_count = int(args["dir1_count"])
+        d1_spacing = float(args["dir1_spacing"])
+        d2_count = int(args.get("dir2_count", 1))
+        d2_spacing = float(args.get("dir2_spacing", 0))
 
+        # CATIA ShapeFactory.AddNewRectPattern expects 11 arguments:
+        #   iObjToCopy, count1, count2, spacing1, spacing2,
+        #   length1, length2, direction1, direction2,
+        #   repartition1, repartition2
+        # In count+spacing mode the length args are recomputed by CATIA, so
+        # any non-zero placeholder is fine. The raw feature is passed straight
+        # through with the early-bound ShapeFactory, identical to the working
+        # _circ_pattern path -- the previous late-bound dynamic.Dispatch
+        # detour failed to marshal the CDispatch feature into a COM object.
         pattern = sf.AddNewRectPattern(
             feature,
             d1_count, d2_count,
             d1_spacing, d2_spacing,
-            1, 1,  # direction specification
-            True,   # keep specification
+            1.0, 1.0,       # length1, length2 (ignored in count+spacing mode)
+            1, 1,           # direction specification
+            True, True,     # count + spacing repartition mode
         )
+
+        pattern.KeepSpecifications = True
 
         part.UpdateObject(pattern)
         self.conn.refresh_display()

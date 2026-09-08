@@ -27,6 +27,7 @@ from catia_mcp.tools.export import ExportTools
 from catia_mcp.tools.knowledge import KnowledgeTools
 from catia_mcp.tools.measurement import MeasurementTools
 from catia_mcp.tools.part_design import PartDesignTools
+from catia_mcp.tools.publication import PublicationTools, register_sketcher
 from catia_mcp.tools.reference import ReferenceTools
 from catia_mcp.tools.sketcher import SketcherTools
 
@@ -58,6 +59,8 @@ class CATIAMCPServer:
         self.export_tools = ExportTools(self.connection)
         self.knowledge_tools = KnowledgeTools(self.connection)
         self.reference_tools = ReferenceTools(self.connection)
+        self.publication_tools = PublicationTools(self.connection)
+        register_sketcher(self.sketcher_tools)
 
         # All tool modules
         self._tool_modules = [
@@ -69,6 +72,7 @@ class CATIAMCPServer:
             self.export_tools,
             self.knowledge_tools,
             self.reference_tools,
+            self.publication_tools,
         ]
 
         # Build tool name -> module routing table
